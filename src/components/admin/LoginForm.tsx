@@ -24,14 +24,34 @@ export function LoginForm() {
     try {
       const result = await authClient.signIn.email({ email: email.trim().toLowerCase(), password });
       if (result.error) {
-        setError(result.error.message || "Sign-in failed. Check your credentials.");
+        const failure = result.error as {
+          message?: string;
+          error?: string;
+          status?: number;
+          statusText?: string;
+        };
+        console.error("[admin] sign-in error:", failure);
+        const detail =
+          failure.message ||
+          (typeof failure.error === "string" ? failure.error : "") ||
+          `Sign-in failed (HTTP ${failure.status ?? "?"}). Open /api/admin/session?check=db for diagnostics.`;
+        setError(detail);
         setBusy(false);
         return;
       }
       // Full navigation remounts the root ContentProvider with the new session cookie.
       window.location.replace(params.get("next") || "/admin");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Sign-in failed. Please try again.");
+      // A TypeError here means the browser never reached /api/auth (network,
+      // CORS or mixed-content failure), not wrong credentials.
+      console.error("[admin] sign-in request failed:", caught);
+      setError(
+        caught instanceof TypeError
+          ? "Could not reach the sign-in endpoint. Open DevTools → Network to see the failed request URL, then verify BETTER_AUTH_URL and redeploy."
+          : caught instanceof Error
+            ? caught.message
+            : "Sign-in failed. Please try again.",
+      );
       setBusy(false);
     }
   };

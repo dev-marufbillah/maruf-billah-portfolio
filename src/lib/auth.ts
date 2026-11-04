@@ -23,20 +23,37 @@ function authSecret() {
   return secret;
 }
 
+/** Vercel injects these automatically; they are the real deployment hosts. */
+function vercelHosts(): string[] {
+  return [
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    process.env.VERCEL_BRANCH_URL,
+    process.env.VERCEL_URL,
+  ]
+    .map((value) => (value || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, ""))
+    .filter((value) => value.length > 0);
+}
+
+/**
+ * Never trust a localhost BETTER_AUTH_URL on Vercel. A leftover local value
+ * used to make cookies/origin checks point at the visitor's own machine.
+ */
 export function authBaseURL() {
-  return (
-    (process.env.BETTER_AUTH_URL || "").trim() ||
-    (process.env.NEXT_PUBLIC_APP_URL || "").trim() ||
-    "http://localhost:3000"
-  ).replace(/\/$/, "");
+  const explicit = (process.env.BETTER_AUTH_URL || "").trim().replace(/\/$/, "");
+  if (explicit.startsWith("https://")) return explicit;
+  const host = vercelHosts()[0];
+  if (host) return `https://${host}`;
+  return explicit || "http://localhost:3000";
 }
 
 function trustedOrigins() {
   const origins = new Set<string>([authBaseURL()]);
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "").trim();
-  if (appUrl) origins.add(appUrl.replace(/\/$/, ""));
+  for (const host of vercelHosts()) origins.add(`https://${host}`);
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/$/, "");
+  if (appUrl.startsWith("https://")) origins.add(appUrl);
   origins.add("http://localhost:3000");
-  // Arena live preview proxy.
+  // Vercel preview deployments and Arena live preview proxy.
+  if (isVercelRuntime()) origins.add("https://*.vercel.app");
   origins.add("https://*.e2b.app");
   return [...origins];
 }
