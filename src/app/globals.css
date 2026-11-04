@@ -46,10 +46,34 @@
 }
 
 html {
-  scroll-behavior: smooth;
+  /* Lenis owns smooth wheel scrolling. CSS `scroll-behavior: smooth` makes
+     every programmatic scrollTo (including Next.js' route reset) animate,
+     which is why a new page could reopen at the previous page's offset.
+     Same-page hash links are animated by ScrollManager via Lenis instead. */
+  scroll-behavior: auto;
   scroll-padding-top: calc(var(--nav-height) + 20px);
   overflow-x: clip;
   background: #f7f6f2;
+}
+
+/* Required Lenis stylesheet rules (were missing). Without `scroll-behavior:
+   auto` on .lenis-smooth, Lenis and the browser animate the same scroll and
+   fight each other on every route change. */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
 }
 
 html[data-font="modern"] {

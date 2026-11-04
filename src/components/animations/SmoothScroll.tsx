@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useReducedMotion } from "@/lib/use-reduced-motion";
+import { ScrollManager } from "@/components/animations/ScrollManager";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { ReactLenis, useLenis } from "lenis/react";
@@ -44,8 +45,23 @@ export function SmoothScroll({ children }: { children: ReactNode }) {
   const isPlainScroll = pathname.startsWith("/admin") || pathname.startsWith("/login");
   const enabled = !isPlainScroll && isDesktop && motionAllowed && !prefersReducedMotion;
 
-  if (!enabled) return <>{children}</>;
+  // Admin keeps its own scroll container; never touch the document scroll there.
+  if (isPlainScroll) return <>{children}</>;
 
+  // Mobile / reduced motion: no Lenis, but navigation scrolling must still be
+  // deterministic, so ScrollManager falls back to native window scrolling.
+  if (!enabled) {
+    return (
+      <>
+        <ScrollManager />
+        {children}
+      </>
+    );
+  }
+
+  // ScrollManager lives INSIDE ReactLenis so it can drive the Lenis instance.
+  // Mounting it outside would leave Lenis free to restore the stale scroll
+  // offset on its next animation frame.
   return (
     <ReactLenis
       root
@@ -58,6 +74,7 @@ export function SmoothScroll({ children }: { children: ReactNode }) {
       }}
     >
       <LenisScrollTriggerBridge />
+      <ScrollManager />
       {children}
     </ReactLenis>
   );
