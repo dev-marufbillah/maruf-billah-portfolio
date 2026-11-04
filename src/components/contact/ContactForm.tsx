@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldErrors } from "react-hook-form";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle2, Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -28,6 +28,7 @@ export function ContactForm() {
   const [runtimeConfig, setRuntimeConfig] = useState<{ configured: boolean; missing: string[] } | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
   const configRequested = useRef(false);
+  const startedAtRef = useRef("");
 
   // The homepage is statically prerendered, so the build-time flag can be stale.
   // GET /api/contact reports the LIVE server environment (names only, no secrets).
@@ -74,13 +75,19 @@ export function ContactForm() {
   // timestamp. A throttled/cancelled rAF left `startedAt` empty (silent Zod
   // failure) and kept the submit button disabled forever.
   useEffect(() => {
-    setValue("startedAt", createTimestamp());
+    const timestamp = createTimestamp();
+    startedAtRef.current = timestamp;
+    setValue("startedAt", timestamp);
   }, [setValue]);
 
   // Keep the timing token fresh when a long-open tab is refocused.
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === "visible") setValue("startedAt", createTimestamp());
+      if (document.visibilityState === "visible") {
+        const timestamp = createTimestamp();
+        startedAtRef.current = timestamp;
+        setValue("startedAt", timestamp);
+      }
     };
     document.addEventListener("visibilitychange", refresh);
     return () => document.removeEventListener("visibilitychange", refresh);
@@ -145,10 +152,39 @@ export function ContactForm() {
     }
   };
 
-  // Hidden-field / client validation failures must never fail silently.
-  const onInvalid = () => {
+  /**
+   * Hidden-field / client validation failures must never fail silently.
+   * Chrome/LastPass autofill can populate the off-screen honeypot, and a
+   * restored bfcache page can lose the hidden timestamp. Both produce an error
+   * with NO visible highlighted field, so we heal them and explain exactly
+   * what happened instead of showing a vague message.
+   */
+  const onInvalid = (invalid: FieldErrors<ContactInput>) => {
+    const autoFixed: string[] = [];
+
+    if (invalid.startedAt) {
+      const timestamp = startedAtRef.current || createTimestamp();
+      startedAtRef.current = timestamp;
+      setValue("startedAt", timestamp, { shouldValidate: false });
+      autoFixed.push("The form session was refreshed automatically.");
+    }
+    if (invalid.company) {
+      setValue("company", "", { shouldValidate: false });
+      autoFixed.push("A browser autofill value in the hidden spam-check field was cleared.");
+    }
+
+    const visible = (["name", "email", "subject", "message"] as const)
+      .map((key) => invalid[key]?.message)
+      .filter((message): message is string => Boolean(message));
+
+    const detail = visible.length
+      ? visible.join(" ")
+      : autoFixed.length
+        ? `${autoFixed.join(" ")} Press Send Message again — your details are unchanged.`
+        : "Please check the highlighted fields above and try again.";
+
     setStatus("error");
-    setServerMessage("Please check the highlighted fields above and try again.");
+    setServerMessage(detail);
   };
 
   return (
@@ -192,7 +228,12 @@ export function ContactForm() {
         <input
           type="text"
           tabIndex={-1}
-          autoComplete="off"
+          autoComplete="new-password"
+          data-lpignore="true"
+          data-1p-ignore="true"
+          data-bwignore="true"
+          data-form-type="other"
+          spellCheck={false}
           aria-hidden="true"
           className="absolute left-[-9999px] h-0 w-0 opacity-0"
           {...register("company")}
@@ -208,6 +249,7 @@ export function ContactForm() {
               id="contact-name"
               type="text"
               autoComplete="name"
+              spellCheck={false}
               placeholder="Your full name"
               className={cn(fieldClass, errors.name && "border-[#c98a80] focus:border-[#a33a2f] focus:ring-[rgba(163,58,47,0.15)]")}
               aria-invalid={Boolean(errors.name)}
@@ -229,6 +271,7 @@ export function ContactForm() {
               id="contact-email"
               type="email"
               autoComplete="email"
+              spellCheck={false}
               placeholder="you@example.com"
               className={cn(fieldClass, errors.email && "border-[#c98a80] focus:border-[#a33a2f] focus:ring-[rgba(163,58,47,0.15)]")}
               aria-invalid={Boolean(errors.email)}
@@ -250,6 +293,7 @@ export function ContactForm() {
           <input
             id="contact-subject"
             type="text"
+            spellCheck={false}
             placeholder="What would you like to discuss?"
             className={cn(fieldClass, errors.subject && "border-[#c98a80] focus:border-[#a33a2f] focus:ring-[rgba(163,58,47,0.15)]")}
             aria-invalid={Boolean(errors.subject)}
@@ -270,15 +314,20 @@ export function ContactForm() {
           <textarea
             id="contact-message"
             rows={5}
-            placeholder="Tell me a little about your project..."
+            spellCheck={false}
+            placeholder="Tell me a little about your project (at least 20 characters)..."
             className={cn(fieldClass, "resize-y", errors.message && "border-[#c98a80] focus:border-[#a33a2f] focus:ring-[rgba(163,58,47,0.15)]")}
             aria-invalid={Boolean(errors.message)}
             aria-describedby={errors.message ? "contact-message-error" : undefined}
             {...register("message")}
           />
-          {errors.message && (
+          {errors.message ? (
             <p id="contact-message-error" className="mt-2 text-xs text-[#a33a2f]">
               {errors.message.message}
+            </p>
+          ) : (
+            <p className="mt-2 font-body text-[0.68rem] leading-5 text-[#9b968b]">
+              Minimum 20 characters.
             </p>
           )}
         </div>
