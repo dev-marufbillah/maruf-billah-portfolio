@@ -10,12 +10,44 @@ import { useSite } from "@/components/providers/SiteProvider";
 import { cn } from "@/lib/utils";
 import { contactSchema, type ContactInput } from "@/lib/validation";
 
-type Status = "idle" | "loading" | "success" | "error";
+type Status = "idle" | "loading" | "success" | "error" | "handoff";
 
 const fieldClass =
   "mt-2 w-full min-w-0 rounded-[2px] border border-[#d8d2c4] bg-[#fffefb] px-4 py-3 font-body text-sm text-[#171717] outline-none transition-colors placeholder:text-[#b0aa9c] focus:border-[#b18a50] focus:ring-2 focus:ring-[rgba(177,138,80,0.18)]";
 
 const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * ZERO-SETUP CONTACT — no API key, no signup, no env variable, no activation.
+ * This is the classic plain-HTML `mailto:` form: the visitor's own email app
+ * opens with the whole message already written and addressed to you. They
+ * press Send there, and the message lands in your inbox (you can reply directly).
+ *
+ * Change THIS ONE LINE if you want messages at a different inbox.
+ * Optional override: NEXT_PUBLIC_CONTACT_TO_EMAIL (not required).
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+const OWNER_EMAIL =
+  (process.env.NEXT_PUBLIC_CONTACT_TO_EMAIL || "").trim() ||
+  "marufsalauddinofficial@gmail.com";
+
+/** "mailto" = zero-API (default). "server" = Resend / free relay (optional). */
+const DELIVERY_MODE: "mailto" | "server" = "mailto";
+
+function buildMailto(values: ContactInput) {
+  const safeSubject = values.subject.replace(/[\r\n]+/g, " ").trim();
+  const body = [
+    `Name: ${values.name}`,
+    `Email: ${values.email}`,
+    `Subject: ${safeSubject}`,
+    "",
+    values.message,
+    "",
+    "— Sent from your portfolio contact form.",
+  ].join("\n");
+  return `mailto:${OWNER_EMAIL}?subject=${encodeURIComponent(`[Portfolio] ${safeSubject}`)}&body=${encodeURIComponent(body)}`;
+}
 
 function createTimestamp() {
   return Date.now().toString();
@@ -26,6 +58,7 @@ export function ContactForm() {
   const [status, setStatus] = useState<Status>("idle");
   const [serverMessage, setServerMessage] = useState("");
   const [runtimeConfig, setRuntimeConfig] = useState<{ configured: boolean; missing: string[] } | null>(null);
+  const [mailtoUrl, setMailtoUrl] = useState("");
   const statusRef = useRef<HTMLDivElement | null>(null);
   const configRequested = useRef(false);
   const startedAtRef = useRef("");
@@ -35,7 +68,7 @@ export function ContactForm() {
   // One idempotent GET per mount; no AbortController so React's effect replay
   // cannot produce a spurious aborted network request.
   useEffect(() => {
-    if (configRequested.current) return;
+    if (DELIVERY_MODE !== "server" || configRequested.current) return;
     configRequested.current = true;
     fetch("/api/contact", { cache: "no-store" })
       .then((response) => response.json().catch(() => ({})))
@@ -50,7 +83,8 @@ export function ContactForm() {
       .catch(() => undefined);
   }, []);
 
-  const emailConfigured = runtimeConfig?.configured ?? buildTimeConfigured;
+  // mailto mode needs no configuration at all, so the badge is always ready.
+  const emailConfigured = DELIVERY_MODE === "mailto" ? true : (runtimeConfig?.configured ?? buildTimeConfigured);
 
   const {
     register,
@@ -95,7 +129,7 @@ export function ContactForm() {
 
   // Make success/error feedback visible even when it sits below the button.
   useEffect(() => {
-    if (status !== "success" && status !== "error") return;
+    if (status !== "success" && status !== "error" && status !== "handoff") return;
     const node = statusRef.current;
     if (!node) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -105,6 +139,16 @@ export function ContactForm() {
   const onSubmit = async (values: ContactInput) => {
     setStatus("loading");
     setServerMessage("");
+
+    // ZERO-API path: no fetch, no API key, no env var, no activation.
+    if (DELIVERY_MODE === "mailto") {
+      const url = buildMailto(values);
+      setMailtoUrl(url);
+      setStatus("handoff");
+      setServerMessage("Your email app is opening with the message already written. Press Send there — it will arrive in my inbox. If nothing opened, use the link below.");
+      window.location.href = url;
+      return;
+    }
 
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -120,7 +164,20 @@ export function ContactForm() {
         ok?: boolean;
         error?: string;
         message?: string;
+        requiresMailto?: boolean;
+        mailtoUrl?: string;
+        deliveredBy?: string;
       };
+
+      // No false success: if no relay could deliver, hand the visitor their
+      // own mail app with the whole message prefilled.
+      if (result.requiresMailto && result.mailtoUrl) {
+        setMailtoUrl(result.mailtoUrl);
+        setStatus("handoff");
+        setServerMessage(result.error || "Your email app is opening with the message — press Send there.");
+        window.location.href = result.mailtoUrl;
+        return;
+      }
 
       if (!response.ok || !result.ok) {
         throw new Error(result.error || `Request failed (${response.status}). Please try again.`);
@@ -344,13 +401,13 @@ export function ContactForm() {
             {status === "loading" ? "Sending..." : "Send Message"}
           </Button>
           <p className="font-body text-[0.68rem] leading-5 text-[#9b968b]">
-            Protected by validation, a honeypot, timing checks, and a server-side rate limit.
+            Validated in your browser. Opens your email app — no account or API needed.
           </p>
         </div>
 
         <div ref={statusRef} aria-live="polite" aria-atomic="true">
           <AnimatePresence mode="wait">
-            {(status === "success" || status === "error") && (
+            {(status === "success" || status === "error" || status === "handoff") && (
               <motion.div
                 key={status}
                 initial={{ opacity: 0, y: 8 }}
@@ -361,7 +418,9 @@ export function ContactForm() {
                   "flex items-start gap-3 rounded-[2px] border p-4 font-body text-sm leading-6",
                   status === "success"
                     ? "border-[#b9c9b3] bg-[rgba(95,122,95,0.08)] text-[#4f6b52]"
-                    : "border-[#d8a9a3] bg-[rgba(163,58,47,0.07)] text-[#a33a2f]",
+                    : status === "handoff"
+                      ? "border-[#d8c9a9] bg-[rgba(177,138,80,0.08)] text-[#8a6a3b]"
+                      : "border-[#d8a9a3] bg-[rgba(163,58,47,0.07)] text-[#a33a2f]",
                 )}
               >
                 {status === "success" ? (
@@ -369,7 +428,14 @@ export function ContactForm() {
                 ) : (
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 )}
-                <p>{serverMessage}</p>
+                <div className="min-w-0">
+                  <p>{serverMessage}</p>
+                  {status === "handoff" && mailtoUrl && (
+                    <a href={mailtoUrl} className="mt-2 inline-block font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                      Open email app again →
+                    </a>
+                  )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
