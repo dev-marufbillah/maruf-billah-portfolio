@@ -429,8 +429,7 @@ export function AdminStudio() {
       <Panel title="Resume" sectionKeys={tabSections.resume} description="Upload a real PDF directly from the browser. Download and preview activate only after an upload or a public/resume.pdf file exists.">
         <Card>
           <h2 className="font-display text-lg font-semibold text-white">Upload PDF</h2>
-          <p className="mt-2 text-xs leading-6 text-muted">Uploaded server-side to Cloudinary (signed). The URL and public_id are saved in the database, so the file survives refresh, other devices and redeploys. PDF up to 8 MB.</p>
-          <div className="mt-5"><FileField value={content.personal.resume.dataUrl} accept="application/pdf" uploadKey="personal.resume" onChange={(value) => update((draft) => { draft.personal.resume.dataUrl = value; draft.personal.resume.enabled = Boolean(value); })} /></div>
+          <p className="mt-2 text-xs leading-6 text-muted">Uploaded server-side to Cloudinary (signed). The URL and public_id are saved in the database, so the file survives refresh, other devices and redeploys. PDF up to 3 MB (Vercel&apos;s 4.5 MB request-body limit). After uploading, click Save to publish — Download and Preview then activate automatically.</p>          <div className="mt-5"><FileField value={content.personal.resume.dataUrl} accept="application/pdf" uploadKey="personal.resume" onChange={(value) => update((draft) => { draft.personal.resume.dataUrl = value; draft.personal.resume.enabled = Boolean(value); })} /></div>
         </Card>
         <Card>
           <ObjectEditor

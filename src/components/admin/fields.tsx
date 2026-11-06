@@ -108,6 +108,15 @@ export function FileField({ value, onChange, accept, uploadKey }: FileFieldProps
   const onSelect = async (file: File) => {
     setError("");
     setSuccess("");
+
+    // Vercel Functions cap request bodies at 4.5 MB; base64 adds ~33%, so a
+    // 3 MB file is the practical ceiling. Fail here with a clear message
+    // instead of letting Vercel answer with an opaque 413 HTML page.
+    if (file.size > 3 * 1024 * 1024) {
+      setError(`This file is ${(file.size / (1024 * 1024)).toFixed(1)} MB. Vercel allows a maximum of 3 MB for browser uploads — please compress the PDF or image and try again.`);
+      return;
+    }
+
     setBusy(true);
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -123,12 +132,28 @@ export function FileField({ value, onChange, accept, uploadKey }: FileFieldProps
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: uploadKey || "asset", dataUrl }),
       });
-      const result = (await response.json().catch(() => ({}))) as { ok?: boolean; url?: string; error?: string; message?: string };
+      const raw = await response.text().catch(() => "");
+      let result: { ok?: boolean; url?: string; error?: string; message?: string } = {};
+      try {
+        result = JSON.parse(raw) as typeof result;
+      } catch {
+        // Vercel sometimes returns an HTML/plain-text error instead of JSON.
+      }
+
       if (!response.ok || !result.ok || !result.url) {
-        throw new Error(result.error || `Upload failed (${response.status}).`);
+        if (response.status === 413) {
+          throw new Error("Vercel rejected the request: the file is too large (4.5 MB body limit). Use a PDF under 3 MB.");
+        }
+        if (response.status === 401) {
+          throw new Error("Your admin session expired. Sign in again at /login, then retry the upload.");
+        }
+        if (!result.error && raw) {
+          throw new Error(`Upload failed (HTTP ${response.status}). Server said: ${raw.replace(/<[^>]*>/g, " ").slice(0, 160)}`);
+        }
+        throw new Error(result.error || `Upload failed (HTTP ${response.status}). Check /api/admin/upload?check=config`);
       }
       onChange(result.url);
-      setSuccess(result.message || "Uploaded and saved to the database.");
+      setSuccess(result.message || "Uploaded and saved to the database. Click Save to publish it.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Upload failed.");
     } finally {
@@ -187,7 +212,19 @@ export function FileField({ value, onChange, accept, uploadKey }: FileFieldProps
           </button>
         </div>
       )}
-      {error && <p role="alert" className="text-xs text-[#a33a2f]">{error}</p>}
+      {error && (
+        <div role="alert" className="space-y-1">
+          <p className="text-xs leading-5 text-[#a33a2f]">{error}</p>
+          <a
+            href="/api/admin/upload?check=config"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block font-accent text-[0.6rem] font-semibold uppercase tracking-[0.12em] text-[#8a6a3b] underline underline-offset-2 hover:text-[#171717]"
+          >
+            Check Cloudinary / database config →
+          </a>
+        </div>
+      )}
       {success && <p role="status" className="text-xs text-[#4f6b52]">{success}</p>}
     </div>
   );
