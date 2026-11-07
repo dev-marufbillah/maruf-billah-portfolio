@@ -6,7 +6,6 @@ import { useForm, type FieldErrors } from "react-hook-form";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle2, Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { useSite } from "@/components/providers/SiteProvider";
 import { cn } from "@/lib/utils";
 import { contactSchema, type ContactInput } from "@/lib/validation";
 
@@ -15,14 +14,12 @@ type Status = "idle" | "loading" | "success" | "error" | "handoff";
 const fieldClass =
   "mt-2 w-full min-w-0 rounded-[2px] border border-[#d8d2c4] bg-[#fffefb] px-4 py-3 font-body text-sm text-[#171717] outline-none transition-colors placeholder:text-[#b0aa9c] focus:border-[#b18a50] focus:ring-2 focus:ring-[rgba(177,138,80,0.18)]";
 
-const REQUEST_TIMEOUT_MS = 15_000;
-
 /**
  * ─────────────────────────────────────────────────────────────────────────
- * ZERO-SETUP CONTACT — no API key, no signup, no env variable, no activation.
- * This is the classic plain-HTML `mailto:` form: the visitor's own email app
- * opens with the whole message already written and addressed to you. They
- * press Send there, and the message lands in your inbox (you can reply directly).
+ * PURE CODE CONTACT — no API, no key, no env var, no signup, no activation,
+ * no server call at all. The form builds an email draft in the visitor's own
+ * webmail (Gmail / Outlook / Yahoo) with To, Subject and the whole message
+ * already written. They press Send there and it arrives in YOUR inbox.
  *
  * Change THIS ONE LINE if you want messages at a different inbox.
  * Optional override: NEXT_PUBLIC_CONTACT_TO_EMAIL (not required).
@@ -32,56 +29,51 @@ const OWNER_EMAIL =
   (process.env.NEXT_PUBLIC_CONTACT_TO_EMAIL || "").trim() ||
   "marufsalauddinofficial@gmail.com";
 
-/**
- * "server" (default) = tries to deliver straight into the owner's inbox with
- * the free no-API-key relay. If that is not activated yet, it falls back to a
- * GMAIL COMPOSE link that opens in the browser — no mail app needed.
- * "mailto" = purely the visitor's own email app (old behaviour).
- */
-const DELIVERY_MODE: "server" | "mailto" = "server";
+interface HandoffLinks {
+  gmail: string;
+  outlook: string;
+  yahoo: string;
+  mailto: string;
+}
 
-function buildMailto(values: ContactInput) {
-  const safeSubject = values.subject.replace(/[\r\n]+/g, " ").trim();
+const emptyLinks: HandoffLinks = { gmail: "", outlook: "", yahoo: "", mailto: "" };
+
+function messageParts(values: ContactInput) {
+  const subject = values.subject.replace(/[\r\n]+/g, " ").trim();
   const body = [
     `Name: ${values.name}`,
     `Email: ${values.email}`,
-    `Subject: ${safeSubject}`,
+    `Subject: ${subject}`,
     "",
     values.message,
     "",
     "— Sent from your portfolio contact form.",
   ].join("\n");
-  return `mailto:${OWNER_EMAIL}?subject=${encodeURIComponent(`[Portfolio] ${safeSubject}`)}&body=${encodeURIComponent(body)}`;
+  return { subject: `[Portfolio] ${subject}`, body };
 }
 
-/** Gmail compose in the browser — works on any PC even with NO mail app installed. */
-function buildGmailUrl(values: ContactInput) {
-  const safeSubject = values.subject.replace(/[\r\n]+/g, " ").trim();
-  const body = [
-    `Name: ${values.name}`,
-    `Email: ${values.email}`,
-    `Subject: ${safeSubject}`,
-    "",
-    values.message,
-    "",
-    "— Sent from your portfolio contact form.",
-  ].join("\n");
-  const query = new URLSearchParams({
-    view: "cm",
-    fs: "1",
-    to: OWNER_EMAIL,
-    su: `[Portfolio] ${safeSubject}`,
-    body,
-  });
-  return `https://mail.google.com/mail/?${query.toString()}`;
+function buildLinks(values: ContactInput): HandoffLinks {
+  const { subject, body } = messageParts(values);
+
+  const gmail = new URLSearchParams({ view: "cm", fs: "1", to: OWNER_EMAIL, su: subject, body });
+  const outlook = new URLSearchParams({ to: OWNER_EMAIL, subject, body });
+  const yahoo = new URLSearchParams({ to: OWNER_EMAIL, subject, body });
+
+  return {
+    gmail: `https://mail.google.com/mail/?${gmail.toString()}`,
+    outlook: `https://outlook.live.com/mail/0/deeplink/compose?${outlook.toString()}`,
+    yahoo: `https://compose.mail.yahoo.com/?${yahoo.toString()}`,
+    mailto: `mailto:${OWNER_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+  };
 }
 
-/** Always makes SOMETHING visible: new tab, or the same tab if popups are blocked. */
-function openCompose(url: string) {
-  const tab = window.open(url, "_blank");
-  if (tab) {
-    tab.opener = null;
-  } else {
+/** Always opens SOMETHING: a new tab, or the same tab if popups are blocked. */
+function openDraft(url: string) {
+  try {
+    const tab = window.open(url, "_blank");
+    if (tab) tab.opener = null;
+    else window.location.href = url;
+  } catch {
     window.location.href = url;
   }
 }
@@ -91,41 +83,15 @@ function createTimestamp() {
 }
 
 export function ContactForm() {
-  const { emailConfigured: buildTimeConfigured } = useSite();
   const [status, setStatus] = useState<Status>("idle");
   const [serverMessage, setServerMessage] = useState("");
-  const [runtimeConfig, setRuntimeConfig] = useState<{ configured: boolean; missing: string[] } | null>(null);
-  const [mailtoUrl, setMailtoUrl] = useState("");
-  const [gmailUrl, setGmailUrl] = useState("");
+  const [links, setLinks] = useState<HandoffLinks>(emptyLinks);
   const statusRef = useRef<HTMLDivElement | null>(null);
-  const configRequested = useRef(false);
   const startedAtRef = useRef("");
-
-  // The homepage is statically prerendered, so the build-time flag can be stale.
-  // GET /api/contact reports the LIVE server environment (names only, no secrets).
-  useEffect(() => {
-    if (DELIVERY_MODE !== "server" || configRequested.current) return;
-    configRequested.current = true;
-    fetch("/api/contact", { cache: "no-store" })
-      .then((response) => response.json().catch(() => ({})))
-      .then((data: { configured?: unknown; missing?: unknown }) => {
-        if (typeof data?.configured === "boolean") {
-          setRuntimeConfig({
-            configured: data.configured,
-            missing: Array.isArray(data.missing) ? data.missing.filter((item): item is string => typeof item === "string") : [],
-          });
-        }
-      })
-      .catch(() => undefined);
-  }, []);
-
-  // mailto mode needs no configuration at all, so the badge is always ready.
-  const emailConfigured = DELIVERY_MODE === "mailto" ? true : (runtimeConfig?.configured ?? buildTimeConfigured);
 
   const {
     register,
     handleSubmit,
-    reset,
     setValue,
     formState: { errors },
   } = useForm<ContactInput>({
@@ -141,6 +107,7 @@ export function ContactForm() {
     },
   });
 
+  // Hidden anti-bot timestamp must never depend on requestAnimationFrame.
   useEffect(() => {
     const timestamp = createTimestamp();
     startedAtRef.current = timestamp;
@@ -167,83 +134,21 @@ export function ContactForm() {
     node.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
   }, [status]);
 
-  const onSubmit = async (values: ContactInput) => {
-    setStatus("loading");
-    setServerMessage("");
-
-    // Pure zero-API path: open Gmail compose in the browser (no mail app needed).
-    if (DELIVERY_MODE === "mailto") {
-      const gmail = buildGmailUrl(values);
-      const mail = buildMailto(values);
-      setGmailUrl(gmail);
-      setMailtoUrl(mail);
-      setStatus("handoff");
-      setServerMessage("Gmail is opening with the message already written. Press Send there — it will arrive in my inbox. If nothing opened, use a link below.");
-      openCompose(gmail);
-      return;
-    }
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-    try {
-      const response = await fetch("/api/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-        signal: controller.signal,
-      });
-      const result = (await response.json().catch(() => ({}))) as {
-        ok?: boolean;
-        error?: string;
-        message?: string;
-        requiresMailto?: boolean;
-        mailtoUrl?: string;
-        deliveredBy?: string;
-      };
-
-      // No false success: if no relay could deliver, hand the visitor their
-      // own mail app with the whole message prefilled.
-      if (result.requiresMailto && result.mailtoUrl) {
-        const gmail = buildGmailUrl(values);
-        setGmailUrl(gmail);
-        setMailtoUrl(result.mailtoUrl);
-        setStatus("handoff");
-        setServerMessage(`${result.error || "Delivery is not active yet."} Gmail is opening with the message already written — press Send there, or use a link below.`);
-        openCompose(gmail);
-        return;
-      }
-
-      if (!response.ok || !result.ok) {
-        throw new Error(result.error || `Request failed (${response.status}). Please try again.`);
-      }
-
-      setStatus("success");
-      setServerMessage(result.message || "Your message was sent successfully.");
-      const nextTimestamp = createTimestamp();
-      reset({
-        name: "",
-        email: "",
-        subject: "",
-        message: "",
-        company: "",
-        startedAt: nextTimestamp,
-      });
-    } catch (error) {
-      const timedOut = error instanceof DOMException && error.name === "AbortError";
-      setStatus("error");
-      setServerMessage(
-        timedOut
-          ? "The request timed out. Please check your connection and try again."
-          : error instanceof Error
-            ? error.message
-            : "The message could not be sent. Please try again.",
-      );
-    } finally {
-      window.clearTimeout(timeout);
-    }
+  const onSubmit = (values: ContactInput) => {
+    const next = buildLinks(values);
+    setLinks(next);
+    setStatus("handoff");
+    setServerMessage(
+      "Ready! Your email opened with the whole message already written. Press Send there — I will receive it in my inbox. If nothing opened, choose a link below.",
+    );
+    openDraft(next.gmail);
   };
 
+  /**
+   * Chrome/LastPass autofill can fill the hidden honeypot, and a restored
+   * bfcache page can lose the hidden timestamp. Heal both and explain clearly
+   * instead of failing silently with no highlighted field.
+   */
   const onInvalid = (invalid: FieldErrors<ContactInput>) => {
     const autoFixed: string[] = [];
 
@@ -279,29 +184,11 @@ export function ContactForm() {
           <p className="eyebrow">Send a message</p>
           <h3 className="mt-2 font-display text-2xl font-medium text-[#171717]">Project inquiry</h3>
         </div>
-        <span
-          className={cn(
-            "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-accent text-[0.58rem] font-semibold uppercase tracking-[0.14em]",
-            emailConfigured
-              ? "border-[#b9c9b3] bg-[rgba(95,122,95,0.08)] text-[#4f6b52]"
-              : "border-[#d8c9a9] bg-[rgba(177,138,80,0.08)] text-[#8a6a3b]",
-          )}
-        >
-          <span className={cn("h-1.5 w-1.5 rounded-full", emailConfigured ? "bg-[#5f7a5f]" : "bg-[#b18a50]")} />
-          {emailConfigured ? "Email configured" : "Setup required"}
+        <span className="inline-flex items-center gap-2 rounded-full border border-[#b9c9b3] bg-[rgba(95,122,95,0.08)] px-3 py-1.5 font-accent text-[0.58rem] font-semibold uppercase tracking-[0.14em] text-[#4f6b52]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#5f7a5f]" />
+          Ready to send
         </span>
       </div>
-
-      {!emailConfigured && (
-        <div className="mb-6 flex items-start gap-3 rounded-[2px] border border-[#e2d5b8] bg-[rgba(177,138,80,0.07)] p-4 font-body text-xs leading-6 text-[#7a5f34]">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <p>
-            {runtimeConfig?.missing?.length
-              ? `Server variables missing: ${runtimeConfig.missing.join(", ")}. Add them in Vercel (Production) and redeploy — variables only reach a running deployment after a new deploy.`
-              : "Resend credentials are not configured. The server will return a real error until the environment variables are added; the form never shows a false success."}
-          </p>
-        </div>
-      )}
 
       <form
         noValidate
@@ -429,7 +316,7 @@ export function ContactForm() {
             {status === "loading" ? "Sending..." : "Send Message"}
           </Button>
           <p className="font-body text-[0.68rem] leading-5 text-[#9b968b]">
-            Validated in your browser. Delivered to the inbox, or opened in Gmail — no API key needed.
+            Opens your email with the message ready — no account or API needed.
           </p>
         </div>
 
@@ -460,16 +347,18 @@ export function ContactForm() {
                   <p>{serverMessage}</p>
                   {status === "handoff" && (
                     <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-                      {gmailUrl && (
-                        <a href={gmailUrl} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                          Open Gmail to send →
-                        </a>
-                      )}
-                      {mailtoUrl && (
-                        <a href={mailtoUrl} className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                          Open email app →
-                        </a>
-                      )}
+                      <a href={links.gmail} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                        Gmail →
+                      </a>
+                      <a href={links.outlook} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                        Outlook →
+                      </a>
+                      <a href={links.yahoo} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                        Yahoo →
+                      </a>
+                      <a href={links.mailto} className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                        Email app →
+                      </a>
                     </div>
                   )}
                 </div>
