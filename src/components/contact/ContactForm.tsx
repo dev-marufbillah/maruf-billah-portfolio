@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type FieldErrors } from "react-hook-form";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, CheckCircle2, Loader2, Send } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, Mail, Send } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import { contactSchema, type ContactInput } from "@/lib/validation";
@@ -138,9 +138,7 @@ export function ContactForm() {
     const next = buildLinks(values);
     setLinks(next);
     setStatus("handoff");
-    setServerMessage(
-      "Ready! Your email opened with the whole message already written. Press Send there — I will receive it in my inbox. If nothing opened, choose a link below.",
-    );
+    setServerMessage("Your draft is open with everything filled in. Press Send there and it arrives directly in my inbox.");
     openDraft(next.gmail);
   };
 
@@ -316,7 +314,7 @@ export function ContactForm() {
             {status === "loading" ? "Sending..." : "Send Message"}
           </Button>
           <p className="font-body text-[0.68rem] leading-5 text-[#9b968b]">
-            Opens your email with the message ready — no account or API needed.
+            Opens in your email app — nothing is stored or shared.
           </p>
         </div>
 
@@ -330,38 +328,44 @@ export function ContactForm() {
                 exit={{ opacity: 0, y: -6 }}
                 role={status === "error" ? "alert" : "status"}
                 className={cn(
-                  "flex items-start gap-3 rounded-[2px] border p-4 font-body text-sm leading-6",
+                  "flex items-start gap-3 rounded-[2px] border font-body text-sm leading-6",
                   status === "success"
-                    ? "border-[#b9c9b3] bg-[rgba(95,122,95,0.08)] text-[#4f6b52]"
+                    ? "border-[#b9c9b3] bg-[rgba(95,122,95,0.08)] p-4 text-[#4f6b52]"
                     : status === "handoff"
-                      ? "border-[#d8c9a9] bg-[rgba(177,138,80,0.08)] text-[#8a6a3b]"
-                      : "border-[#d8a9a3] bg-[rgba(163,58,47,0.07)] text-[#a33a2f]",
+                      ? "border-[#e5e2da] border-l-2 border-l-[#b18a50] bg-[#faf9f5] px-5 py-4 text-[#171717]"
+                      : "border-[#d8a9a3] bg-[rgba(163,58,47,0.07)] p-4 text-[#a33a2f]",
                 )}
               >
                 {status === "success" ? (
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#4f6b52]" aria-hidden="true" />
+                ) : status === "handoff" ? (
+                  <Mail className="mt-1 h-3.5 w-3.5 shrink-0 text-[#a17b42]" aria-hidden="true" />
                 ) : (
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 )}
-                <div className="min-w-0">
-                  <p>{serverMessage}</p>
-                  {status === "handoff" && (
-                    <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-                      <a href={links.gmail} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                        Gmail →
+                {status === "handoff" ? (
+                  <div className="min-w-0 flex-1">
+                    <p className="font-accent text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-[#8a6a3b]">Message ready</p>
+                    <p className="mt-1.5 text-[0.82rem] leading-6 text-[#6f6a60]">{serverMessage}</p>
+                    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+                      <a href={links.gmail} target="_blank" rel="noreferrer" className="font-accent text-[0.6rem] font-semibold uppercase tracking-[0.12em] text-[#a17b42] underline decoration-[#d8c9a9] underline-offset-4 transition-colors hover:text-[#171717]">
+                        Open draft again →
                       </a>
-                      <a href={links.outlook} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                        Outlook →
-                      </a>
-                      <a href={links.yahoo} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                        Yahoo →
-                      </a>
-                      <a href={links.mailto} className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                        Email app →
-                      </a>
+                      <details className="group">
+                        <summary className="cursor-pointer list-none font-accent text-[0.6rem] font-semibold uppercase tracking-[0.12em] text-[#9b968b] transition-colors hover:text-[#171717]">
+                          Other email apps
+                        </summary>
+                        <div className="mt-2 flex flex-wrap gap-3">
+                          <a href={links.outlook} target="_blank" rel="noreferrer" className="font-body text-[0.7rem] text-[#8b8579] underline underline-offset-2 hover:text-[#171717]">Outlook</a>
+                          <a href={links.yahoo} target="_blank" rel="noreferrer" className="font-body text-[0.7rem] text-[#8b8579] underline underline-offset-2 hover:text-[#171717]">Yahoo</a>
+                          <a href={links.mailto} className="font-body text-[0.7rem] text-[#8b8579] underline underline-offset-2 hover:text-[#171717]">Email app</a>
+                        </div>
+                      </details>
                     </div>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <p className="min-w-0">{serverMessage}</p>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
