@@ -32,8 +32,13 @@ const OWNER_EMAIL =
   (process.env.NEXT_PUBLIC_CONTACT_TO_EMAIL || "").trim() ||
   "marufsalauddinofficial@gmail.com";
 
-/** "mailto" = zero-API (default). "server" = Resend / free relay (optional). */
-const DELIVERY_MODE: "mailto" | "server" = "mailto";
+/**
+ * "server" (default) = tries to deliver straight into the owner's inbox with
+ * the free no-API-key relay. If that is not activated yet, it falls back to a
+ * GMAIL COMPOSE link that opens in the browser — no mail app needed.
+ * "mailto" = purely the visitor's own email app (old behaviour).
+ */
+const DELIVERY_MODE: "server" | "mailto" = "server";
 
 function buildMailto(values: ContactInput) {
   const safeSubject = values.subject.replace(/[\r\n]+/g, " ").trim();
@@ -49,6 +54,38 @@ function buildMailto(values: ContactInput) {
   return `mailto:${OWNER_EMAIL}?subject=${encodeURIComponent(`[Portfolio] ${safeSubject}`)}&body=${encodeURIComponent(body)}`;
 }
 
+/** Gmail compose in the browser — works on any PC even with NO mail app installed. */
+function buildGmailUrl(values: ContactInput) {
+  const safeSubject = values.subject.replace(/[\r\n]+/g, " ").trim();
+  const body = [
+    `Name: ${values.name}`,
+    `Email: ${values.email}`,
+    `Subject: ${safeSubject}`,
+    "",
+    values.message,
+    "",
+    "— Sent from your portfolio contact form.",
+  ].join("\n");
+  const query = new URLSearchParams({
+    view: "cm",
+    fs: "1",
+    to: OWNER_EMAIL,
+    su: `[Portfolio] ${safeSubject}`,
+    body,
+  });
+  return `https://mail.google.com/mail/?${query.toString()}`;
+}
+
+/** Always makes SOMETHING visible: new tab, or the same tab if popups are blocked. */
+function openCompose(url: string) {
+  const tab = window.open(url, "_blank");
+  if (tab) {
+    tab.opener = null;
+  } else {
+    window.location.href = url;
+  }
+}
+
 function createTimestamp() {
   return Date.now().toString();
 }
@@ -59,14 +96,13 @@ export function ContactForm() {
   const [serverMessage, setServerMessage] = useState("");
   const [runtimeConfig, setRuntimeConfig] = useState<{ configured: boolean; missing: string[] } | null>(null);
   const [mailtoUrl, setMailtoUrl] = useState("");
+  const [gmailUrl, setGmailUrl] = useState("");
   const statusRef = useRef<HTMLDivElement | null>(null);
   const configRequested = useRef(false);
   const startedAtRef = useRef("");
 
   // The homepage is statically prerendered, so the build-time flag can be stale.
   // GET /api/contact reports the LIVE server environment (names only, no secrets).
-  // One idempotent GET per mount; no AbortController so React's effect replay
-  // cannot produce a spurious aborted network request.
   useEffect(() => {
     if (DELIVERY_MODE !== "server" || configRequested.current) return;
     configRequested.current = true;
@@ -105,16 +141,12 @@ export function ContactForm() {
     },
   });
 
-  // Root-cause fix: never depend on requestAnimationFrame for the hidden
-  // timestamp. A throttled/cancelled rAF left `startedAt` empty (silent Zod
-  // failure) and kept the submit button disabled forever.
   useEffect(() => {
     const timestamp = createTimestamp();
     startedAtRef.current = timestamp;
     setValue("startedAt", timestamp);
   }, [setValue]);
 
-  // Keep the timing token fresh when a long-open tab is refocused.
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState === "visible") {
@@ -127,7 +159,6 @@ export function ContactForm() {
     return () => document.removeEventListener("visibilitychange", refresh);
   }, [setValue]);
 
-  // Make success/error feedback visible even when it sits below the button.
   useEffect(() => {
     if (status !== "success" && status !== "error" && status !== "handoff") return;
     const node = statusRef.current;
@@ -140,13 +171,15 @@ export function ContactForm() {
     setStatus("loading");
     setServerMessage("");
 
-    // ZERO-API path: no fetch, no API key, no env var, no activation.
+    // Pure zero-API path: open Gmail compose in the browser (no mail app needed).
     if (DELIVERY_MODE === "mailto") {
-      const url = buildMailto(values);
-      setMailtoUrl(url);
+      const gmail = buildGmailUrl(values);
+      const mail = buildMailto(values);
+      setGmailUrl(gmail);
+      setMailtoUrl(mail);
       setStatus("handoff");
-      setServerMessage("Your email app is opening with the message already written. Press Send there — it will arrive in my inbox. If nothing opened, use the link below.");
-      window.location.href = url;
+      setServerMessage("Gmail is opening with the message already written. Press Send there — it will arrive in my inbox. If nothing opened, use a link below.");
+      openCompose(gmail);
       return;
     }
 
@@ -172,10 +205,12 @@ export function ContactForm() {
       // No false success: if no relay could deliver, hand the visitor their
       // own mail app with the whole message prefilled.
       if (result.requiresMailto && result.mailtoUrl) {
+        const gmail = buildGmailUrl(values);
+        setGmailUrl(gmail);
         setMailtoUrl(result.mailtoUrl);
         setStatus("handoff");
-        setServerMessage(result.error || "Your email app is opening with the message — press Send there.");
-        window.location.href = result.mailtoUrl;
+        setServerMessage(`${result.error || "Delivery is not active yet."} Gmail is opening with the message already written — press Send there, or use a link below.`);
+        openCompose(gmail);
         return;
       }
 
@@ -209,13 +244,6 @@ export function ContactForm() {
     }
   };
 
-  /**
-   * Hidden-field / client validation failures must never fail silently.
-   * Chrome/LastPass autofill can populate the off-screen honeypot, and a
-   * restored bfcache page can lose the hidden timestamp. Both produce an error
-   * with NO visible highlighted field, so we heal them and explain exactly
-   * what happened instead of showing a vague message.
-   */
   const onInvalid = (invalid: FieldErrors<ContactInput>) => {
     const autoFixed: string[] = [];
 
@@ -401,7 +429,7 @@ export function ContactForm() {
             {status === "loading" ? "Sending..." : "Send Message"}
           </Button>
           <p className="font-body text-[0.68rem] leading-5 text-[#9b968b]">
-            Validated in your browser. Opens your email app — no account or API needed.
+            Validated in your browser. Delivered to the inbox, or opened in Gmail — no API key needed.
           </p>
         </div>
 
@@ -430,10 +458,19 @@ export function ContactForm() {
                 )}
                 <div className="min-w-0">
                   <p>{serverMessage}</p>
-                  {status === "handoff" && mailtoUrl && (
-                    <a href={mailtoUrl} className="mt-2 inline-block font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
-                      Open email app again →
-                    </a>
+                  {status === "handoff" && (
+                    <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+                      {gmailUrl && (
+                        <a href={gmailUrl} target="_blank" rel="noreferrer" className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                          Open Gmail to send →
+                        </a>
+                      )}
+                      {mailtoUrl && (
+                        <a href={mailtoUrl} className="font-accent text-[0.62rem] font-semibold uppercase tracking-[0.12em] underline underline-offset-2 hover:opacity-80">
+                          Open email app →
+                        </a>
+                      )}
+                    </div>
                   )}
                 </div>
               </motion.div>
